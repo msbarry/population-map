@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>True-Geometry US Population Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.css">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --ink: #17201e;
+      --muted: #56635e;
+      --panel: rgba(252, 253, 250, .96);
+      --panel-solid: #fcfdfa;
+      --line: #c8d0ca;
+      --soft: #e7ebe7;
+      --accent: #f26a16;
+      --accent-ink: #fffaf6;
+      --selection: rgba(217, 75, 43, .22);
+      --selection-line: #b9361d;
+      --shadow: 0 13px 38px rgba(18, 32, 27, .22);
+      --danger: #9f2f1c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #edf3ef;
+        --muted: #b5c1ba;
+        --panel: rgba(22, 29, 26, .96);
+        --panel-solid: #161d1a;
+        --line: #435049;
+        --soft: #2a342f;
+        --accent: #ff7a24;
+        --accent-ink: #251005;
+        --selection: rgba(255, 120, 90, .24);
+        --selection-line: #ff8c71;
+        --shadow: 0 16px 44px rgba(0, 0, 0, .44);
+        --danger: #ff9a83;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--panel-solid); color: var(--ink); }
+    body { font-family: "Avenir Next", Avenir, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overscroll-behavior: none; }
+    button { font: inherit; color: inherit; }
+    button:focus-visible, a:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 68%, white); outline-offset: 2px; }
+    .app { position: relative; width: 100%; height: 100dvh; min-height: 420px; overflow: hidden; }
+    #map { position: absolute; inset: 0; background: #dfe6e2; }
+    #map .maplibregl-ctrl-top-left, #map .maplibregl-ctrl-top-right { display: none; }
+    #map .maplibregl-ctrl-attrib { margin: 0 4px 4px 0; font-size: 9px; }
+    #map .maplibregl-ctrl-attrib-button { width: 25px; height: 25px; }
+
+    #draw-surface { position: absolute; inset: 0; z-index: 3; pointer-events: none; user-select: none; -webkit-user-select: none; }
+    #draw-surface.active { pointer-events: auto; cursor: crosshair; touch-action: none; overscroll-behavior: none; }
+    #selection-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+    .selection-path, .draft-path { fill: var(--selection); stroke: var(--selection-line); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+    .draft-path { fill-opacity: .72; stroke-dasharray: 6 5; }
+
+    .cluster {
+      position: absolute; z-index: 7; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right));
+      width: 280px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px 14px 8px 14px;
+      box-shadow: var(--shadow); backdrop-filter: blur(9px); -webkit-backdrop-filter: blur(9px);
+    }
+    .readout-label { display: block; color: var(--muted); font-size: 10px; font-weight: 800; line-height: 1.2; letter-spacing: .07em; text-transform: uppercase; }
+    .readout-value { display: block; margin-top: 2px; font-family: Charter, Georgia, "Times New Roman", serif; font-size: 30px; line-height: 1.02; letter-spacing: -.035em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .readout-value.instruction { font-family: inherit; font-size: 17px; font-weight: 750; line-height: 1.14; letter-spacing: -.015em; }
+    .readout-meta { display: block; margin-top: 4px; min-height: 15px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+    .actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+    .action {
+      min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel-solid) 84%, var(--soft));
+      cursor: pointer; font-weight: 760; transition: background .15s ease, border-color .15s ease, color .15s ease;
+    }
+    .action:hover { background: var(--soft); }
+    .action.primary { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; background: color-mix(in srgb, var(--panel-solid) 84%, var(--soft)); border-color: var(--line); color: var(--ink); }
+    .action.primary:hover { background: var(--soft); }
+    .action.primary.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+    .action.icon { width: 40px; padding: 0; display: grid; place-items: center; }
+    .action.icon.active { background: var(--ink); border-color: var(--ink); color: var(--panel-solid); }
+    .action:disabled { opacity: .38; cursor: default; }
+    .action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .density-btn { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 9px; }
+    .density-btn .density-label { font-size: 11px; }
+    .progress { position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; overflow: hidden; border-radius: 999px; background: var(--soft); }
+    .progress[hidden] { display: none; }
+    .progress i { display: block; height: 100%; width: 35%; background: var(--accent); border-radius: inherit; animation: wait 1s ease-in-out infinite alternate; }
+    @keyframes wait { from { transform: translateX(-80%); } to { transform: translateX(220%); } }
+
+    .info-popover {
+      position: absolute; z-index: 9; top: calc(100% + 8px); right: 0; width: min(326px, calc(100vw - 24px)); max-height: min(46vh, 360px); overflow: auto;
+      padding: 14px 15px; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 9px 14px 14px 14px; box-shadow: var(--shadow);
+      font-size: 12px; line-height: 1.5; color: var(--muted);
+    }
+    .info-popover[hidden] { display: none; }
+    .info-popover p { margin: 0 0 9px; }
+    .info-popover p:last-child { margin-bottom: 0; }
+    .info-popover strong { color: var(--ink); }
+
+    .toast {
+      position: absolute; z-index: 6; left: 50%; bottom: max(24px, calc(env(safe-area-inset-bottom) + 18px)); transform: translateX(-50%);
+      max-width: calc(100% - 28px); padding: 9px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+      color: var(--muted); font-size: 12px; line-height: 1.35; text-align: center;
+    }
+    .toast[hidden] { display: none; }
+    .map-fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 28px; background: var(--panel-solid); z-index: 2; }
+    .map-fallback div { max-width: 440px; text-align: center; }
+    .map-fallback strong { display: block; font: 700 25px/1.15 Charter, Georgia, serif; }
+    .map-fallback span { display: block; margin-top: 8px; color: var(--muted); line-height: 1.5; }
+
+    @media (max-width: 640px) {
+      .cluster {
+        top: auto; right: max(10px, env(safe-area-inset-right)); bottom: max(24px, calc(env(safe-area-inset-bottom) + 20px)); left: max(10px, env(safe-area-inset-left));
+        width: auto; max-width: 390px; margin: 0 auto; padding: 9px 10px; border-radius: 12px;
+        display: grid; grid-template-columns: minmax(112px, 1fr) auto; align-items: center; gap: 8px;
+      }
+      .readout-value { font-size: 25px; }
+      .readout-value.instruction { font-size: 15px; }
+      .readout-meta { max-width: 176px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .actions { margin: 0; gap: 4px; }
+      .action { min-height: 40px; }
+      .action.primary { flex: 0 0 auto; width: 40px; padding: 0; }
+      .action.primary .label, .density-btn .density-label { display: none; }
+      .density-btn { width: 40px; padding: 0; }
+      .info-popover { top: auto; right: 0; bottom: calc(100% + 8px); width: min(326px, calc(100vw - 20px)); max-height: 40vh; }
+      .toast { bottom: max(106px, calc(env(safe-area-inset-bottom) + 102px)); }
+    }
+    @media (max-width: 360px) {
+      .cluster { left: 7px; right: 7px; gap: 5px; }
+      .readout-meta { max-width: 128px; }
+      .actions { gap: 3px; }
+      .action.primary, .action.icon, .density-btn { width: 38px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+<main class="app" aria-label="Interactive true-geometry map for estimating 2020 population inside a drawn region">
+  <div id="map" aria-label="Map of the United States with a population density overlay"></div>
+  <div id="draw-surface" aria-label="Lasso drawing surface">
+    <svg id="selection-svg" aria-hidden="true">
+      <path id="selection-path" class="selection-path" d=""></path>
+      <path id="draft-path" class="draft-path" d=""></path>
+    </svg>
+  </div>
+
+  <section class="cluster" aria-label="Lasso controls and population result">
+    <div class="readout" aria-live="polite">
+      <span class="readout-label" id="result-label">2020 population</span>
+      <strong class="readout-value instruction" id="result-value">Draw a region</strong>
+      <span class="readout-meta" id="result-meta">Tap the lasso, then trace the map</span>
+    </div>
+    <div class="actions">
+      <button class="action primary" id="lasso-btn" type="button" aria-pressed="false" aria-label="Draw a lasso">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18c2-6 3-11 8-12 3-.5 7 1 8 4 1 4-4 8-8 9-3 .7-6 0-8-1Z"/><path d="M4 18c4-1 7-1 11 0"/></svg>
+        <span class="label">Lasso</span>
+      </button>
+      <button class="action density-btn active" id="density-btn" type="button" aria-pressed="true" aria-label="Hide population density overlay" title="Density overlay">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c4-4 6-10 9-10s4 7 9 3"/><path d="M3 21c4-3 7-6 9-6 3 0 4 2 9-1"/></svg>
+        <span class="density-label">Density</span>
+      </button>
+      <button class="action icon" id="clear-btn" type="button" aria-label="Clear selection" title="Clear selection" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
+      <button class="action icon" id="info-btn" type="button" aria-label="Population data and method" aria-expanded="false" title="Population data and method">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+      </button>
+    </div>
+    <div class="progress" id="progress" hidden aria-label="Calculating population"><i></i></div>
+    <div class="info-popover" id="info-popover" hidden>
+      <p><strong>One raster, two jobs.</strong> The density layer is also the calculator. Its lossless WebP pyramid sits in population.pmtiles beside this page and is read directly with HTTP Range requests.</p>
+      <p>Population is encoded in 8-bit log-scale grayscale: black is zero and brighter pixels represent more people. The lasso chooses the finest zoom that covers its bounds with at most 16 tiles.</p>
+      <p>Pixels fully inside count fully; edge pixels count by the area overlapped. Interior tiles use exact precomputed totals, so only edge tiles need to be fetched and decoded.</p>
+      <p>Source: 2020 Census PL 94-171 block population (POP100), spread uniformly across true TIGER/Line block geometries. At z11, every block is rasterized across its polygon with supersampled pixel coverage; lower zooms sum their four children. The 8-bit log scale and calculation zoom automatically match the selection. Coverage includes the 50 states, DC, and Puerto Rico. Basemap: OpenFreeMap, rendered with MapLibre GL JS.</p>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" hidden role="status"></div>
+</main>
+
+<script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
+<script type="module">
+import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.14.0/dist/maplibre-gl.mjs';
+(function () {
+  'use strict';
+
+  var mapEl = document.getElementById('map');
+  var drawSurface = document.getElementById('draw-surface');
+  var selectionPath = document.getElementById('selection-path');
+  var draftPath = document.getElementById('draft-path');
+  var lassoBtn = document.getElementById('lasso-btn');
+  var densityBtn = document.getElementById('density-btn');
+  var clearBtn = document.getElementById('clear-btn');
+  var infoBtn = document.getElementById('info-btn');
+  var infoPopover = document.getElementById('info-popover');
+  var resultLabel = document.getElementById('result-label');
+  var resultValue = document.getElementById('result-value');
+  var resultMeta = document.getElementById('result-meta');
+  var progress = document.getElementById('progress');
+  var toast = document.getElementById('toast');
+
+  // Read the adjacent PMTiles archive directly. No chunk manifest or embedded data.
+  var tilesUrl = new URL('population.pmtiles', window.location.href).href;
+  var protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+  var archive = new pmtiles.PMTiles(tilesUrl);
+  protocol.add(archive);
+
+  var metadataPromise = null;
+  var metadata = null;
+  var camera = {lng: -96, lat: 38, zoom: 3.35};
+  var mapHandle = null;
+  var map = null;
+  var mapReady = false;
+  var mapUnavailable = false;
+  var densityVisible = true;
+  var drawing = false;
+  var pointerId = null;
+  var draftLngLat = [];
+  var draftScreen = [];
+  var selectedRing = null;
+  var calcToken = 0;
+  var progressTimer = null;
+  var toastTimer = null;
+  var decodedTileCache = new Map();
+  var maskCanvas = document.createElement('canvas');
+  maskCanvas.width = maskCanvas.height = 256;
+  var maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
+  var imageCanvas = document.createElement('canvas');
+  imageCanvas.width = imageCanvas.height = 256;
+  var imageContext = imageCanvas.getContext('2d', {willReadFrequently: true});
+
+  function loadMetadata() {
+    if (!metadataPromise) {
+      metadataPromise = archive.getMetadata().then(function (value) {
+        metadata = value;
+        return value;
+      }).catch(function (error) {
+        metadataPromise = null;
+        throw error;
+      });
+    }
+    return metadataPromise;
+  }
+
+  function initMap() {
+    if (map) map.remove();
+    mapReady = false;
+    mapUnavailable = false;
+    mapEl.replaceChildren();
+    try {
+      map = window.map = new maplibregl.Map({
+        container: mapEl,
+        style: 'https://tiles.openfreemap.org/styles/fiord',
+        center: [camera.lng, camera.lat],
+        zoom: camera.zoom,
+        minZoom: 2,
+        maxZoom: 18,
+        attributionControl: true,
+        hash: true
+      });
+      map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'bottom-left');
+      map.on('move', function () {
+        var center = map.getCenter();
+        camera = {lng: center.lng, lat: center.lat, zoom: map.getZoom()};
+        renderSelection();
+      });
+      map.once('load', addDensityLayer);
+      map.on('error', function (event) {
+        console.error(event.error || event);
+      });
+    } catch (error) {
+      console.error(error);
+      showMapUnavailable();
+    }
+  }
+
+  function addDensityLayer() {
+    if (!map || map.getSource('population-raster')) return;
+    mapReady = true;
+    map.addSource('population-raster', {
+      type: 'raster',
+      url: 'pmtiles://' + tilesUrl,
+      tileSize: 256,
+      minzoom: 4,
+      maxzoom: 11,
+      attribution: '2020 Census PL 94-171',
+    });
+    var layers = map.getStyle().layers || [];
+    var beforeId = null;
+    for (var i = 0; i < layers.length; i++) {
+      if (layers[i].type === 'symbol') { beforeId = layers[i].id; break; }
+    }
+    map.addLayer({
+      id: 'population-density',
+      type: 'raster',
+      source: 'population-raster',
+      minzoom: 2,
+      maxzoom: 24,
+      layout: {visibility: densityVisible ? 'visible' : 'none'},
+      paint: {
+        'raster-opacity': 0.5,
+        'raster-resampling': 'linear',
+        'raster-fade-duration': 120
+      }
+    }, beforeId);
+    renderSelection();
+  }
+
+  function showMapUnavailable() {
+    if (mapUnavailable) return;
+    mapUnavailable = true;
+    setDrawing(false);
+    lassoBtn.disabled = true;
+    mapEl.innerHTML = '<div class="map-fallback"><div><strong>Map unavailable</strong><span>The map could not start. Check the network connection and confirm population.pmtiles is beside index.html on a server that supports HTTP Range requests.</span></div></div>';
+  }
+
+  function setDrawing(next) {
+    drawing = !!next;
+    drawSurface.classList.toggle('active', drawing);
+    lassoBtn.classList.toggle('active', drawing);
+    lassoBtn.setAttribute('aria-pressed', String(drawing));
+    lassoBtn.setAttribute('aria-label', drawing ? 'Cancel lasso drawing' : (selectedRing ? 'Draw a new lasso' : 'Draw a lasso'));
+    lassoBtn.querySelector('.label').textContent = drawing ? 'Cancel' : (selectedRing ? 'Again' : 'Lasso');
+    if (map) {
+      if (drawing) map.dragPan.disable();
+      else map.dragPan.enable();
+    }
+    if (!drawing) {
+      pointerId = null;
+      draftLngLat = [];
+      draftScreen = [];
+      draftPath.setAttribute('d', '');
+    }
+  }
+
+  function localPoint(event) {
+    var rect = drawSurface.getBoundingClientRect();
+    return [event.clientX - rect.left, event.clientY - rect.top];
+  }
+  function distance(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+  function unproject(point) {
+    var ll = map.unproject(point);
+    return [ll.lng, ll.lat];
+  }
+  function pathForRing(ring, close) {
+    if (!ring || ring.length < 2 || !mapReady) return '';
+    var parts = [];
+    for (var i = 0; i < ring.length; i++) {
+      var p = map.project(ring[i]);
+      parts.push((i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1));
+    }
+    return parts.join(' ') + (close && parts.length > 2 ? ' Z' : '');
+  }
+  function renderSelection() {
+    selectionPath.setAttribute('d', selectedRing ? pathForRing(selectedRing, true) : '');
+    draftPath.setAttribute('d', draftLngLat.length ? pathForRing(draftLngLat, false) : '');
+  }
+
+  drawSurface.addEventListener('pointerdown', function (event) {
+    if (!drawing || pointerId !== null || !mapReady) return;
+    event.preventDefault();
+    pointerId = event.pointerId;
+    drawSurface.setPointerCapture(pointerId);
+    var point = localPoint(event);
+    draftScreen = [point];
+    draftLngLat = [unproject(point)];
+    renderSelection();
+  });
+  drawSurface.addEventListener('pointermove', function (event) {
+    if (event.pointerId !== pointerId) return;
+    event.preventDefault();
+    var point = localPoint(event);
+    var previous = draftScreen[draftScreen.length - 1];
+    if (!previous || distance(point, previous) > 3) {
+      draftScreen.push(point);
+      draftLngLat.push(unproject(point));
+      renderSelection();
+    }
+  });
+  function polygonScreenArea(points) {
+    var sum = 0;
+    for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+      sum += points[j][0] * points[i][1] - points[i][0] * points[j][1];
+    }
+    return Math.abs(sum / 2);
+  }
+  function finishDraw(event) {
+    if (event.pointerId !== pointerId) return;
+    event.preventDefault();
+    pointerId = null;
+    if (draftLngLat.length < 3 || polygonScreenArea(draftScreen) < 120) {
+      draftLngLat = [];
+      draftScreen = [];
+      renderSelection();
+      showToast('Draw a slightly larger region with one continuous stroke.');
+      return;
+    }
+    selectedRing = draftLngLat.slice();
+    selectedRing.push(selectedRing[0].slice());
+    draftLngLat = [];
+    draftScreen = [];
+    clearBtn.disabled = false;
+    renderSelection();
+    setDrawing(false);
+    calculate(selectedRing);
+  }
+  drawSurface.addEventListener('pointerup', finishDraw);
+  drawSurface.addEventListener('pointercancel', function (event) {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    draftLngLat = [];
+    draftScreen = [];
+    renderSelection();
+  });
+
+  lassoBtn.addEventListener('click', function () { setDrawing(!drawing); });
+  clearBtn.addEventListener('click', function () {
+    calcToken++;
+    selectedRing = null;
+    clearBtn.disabled = true;
+    renderSelection();
+    setDrawing(false);
+    progress.hidden = true;
+    resultLabel.textContent = '2020 population';
+    resultValue.textContent = 'Draw a region';
+    resultValue.classList.add('instruction');
+    resultMeta.textContent = 'Tap the lasso, then trace the map';
+  });
+  densityBtn.addEventListener('click', function () {
+    densityVisible = !densityVisible;
+    densityBtn.classList.toggle('active', densityVisible);
+    densityBtn.setAttribute('aria-pressed', String(densityVisible));
+    densityBtn.setAttribute('aria-label', densityVisible ? 'Hide population density overlay' : 'Show population density overlay');
+    if (map && map.getLayer('population-density')) {
+      map.setLayoutProperty('population-density', 'visibility', densityVisible ? 'visible' : 'none');
+    }
+  });
+  infoBtn.addEventListener('click', function () {
+    var open = infoPopover.hidden;
+    infoPopover.hidden = !open;
+    infoBtn.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('pointerdown', function (event) {
+    if (infoPopover.hidden || infoPopover.contains(event.target) || infoBtn.contains(event.target)) return;
+    infoPopover.hidden = true;
+    infoBtn.setAttribute('aria-expanded', 'false');
+  });
+
+  function showToast(message) {
+    clearTimeout(toastTimer);
+    toast.textContent = message;
+    toast.hidden = false;
+    toastTimer = setTimeout(function () { toast.hidden = true; }, 2800);
+  }
+  function setBusy() {
+    clearTimeout(progressTimer);
+    progress.hidden = true;
+    resultLabel.textContent = '2020 population';
+    resultValue.textContent = 'Reading pixels…';
+    resultValue.classList.add('instruction');
+    resultMeta.textContent = 'Choosing the fewest useful tiles';
+    progressTimer = setTimeout(function () { progress.hidden = false; }, 220);
+  }
+  function showResult(data) {
+    clearTimeout(progressTimer);
+    progress.hidden = true;
+    resultLabel.textContent = data.population === 0 ? '2020 population' : 'Estimated 2020 population';
+    resultValue.textContent = Math.round(data.population).toLocaleString('en-US');
+    resultValue.classList.remove('instruction');
+    if (data.population === 0) {
+      resultMeta.textContent = 'No encoded population in this region · z' + data.zoom;
+    } else {
+      var pieces = ['z' + data.zoom, data.tiles + (data.tiles === 1 ? ' tile' : ' tiles')];
+      if (data.fetched) pieces.push(data.fetched + ' edge ' + (data.fetched === 1 ? 'tile' : 'tiles'));
+      pieces.push(formatTime(data.elapsed));
+      resultMeta.textContent = pieces.join(' · ');
+    }
+  }
+  function showCalculationError(error) {
+    clearTimeout(progressTimer);
+    progress.hidden = true;
+    resultLabel.textContent = 'Could not calculate';
+    resultValue.textContent = 'Raster unavailable';
+    resultValue.classList.add('instruction');
+    resultMeta.textContent = 'Check population.pmtiles and HTTP Range support';
+    console.error(error);
+  }
+  function formatTime(ms) {
+    return ms < 1000 ? Math.max(1, Math.round(ms)) + ' ms' : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' s';
+  }
+
+  function lngToWorldX(lng, z) { return (lng + 180) / 360 * Math.pow(2, z) * 256; }
+  function latToWorldY(lat, z) {
+    var bounded = Math.max(-85.05112878, Math.min(85.05112878, lat));
+    var sin = Math.sin(bounded * Math.PI / 180);
+    return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * Math.pow(2, z) * 256;
+  }
+  function ringBounds(ring) {
+    var minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (var i = 0; i < ring.length; i++) {
+      minLng = Math.min(minLng, ring[i][0]); maxLng = Math.max(maxLng, ring[i][0]);
+      minLat = Math.min(minLat, ring[i][1]); maxLat = Math.max(maxLat, ring[i][1]);
+    }
+    return [minLng, minLat, maxLng, maxLat];
+  }
+  function tileRangeForBounds(bounds, z) {
+    var n = Math.pow(2, z);
+    var x0 = Math.max(0, Math.min(n - 1, Math.floor((bounds[0] + 180) / 360 * n)));
+    var x1 = Math.max(0, Math.min(n - 1, Math.floor((bounds[2] + 180) / 360 * n - 1e-10)));
+    var y0 = Math.max(0, Math.min(n - 1, Math.floor(latToWorldY(bounds[3], z) / 256)));
+    var y1 = Math.max(0, Math.min(n - 1, Math.floor(latToWorldY(bounds[1], z) / 256 - 1e-10)));
+    return {x0: x0, x1: x1, y0: y0, y1: y1, count: Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1)};
+  }
+  function chooseZoom(bounds) {
+    for (var z = 11; z >= 4; z--) {
+      if (tileRangeForBounds(bounds, z).count <= 16) return z;
+    }
+    return 4;
+  }
+
+  function buildTileMask(ring, z, x, y) {
+    maskContext.setTransform(1, 0, 0, 1, 0, 0);
+    maskContext.clearRect(0, 0, 256, 256);
+    maskContext.fillStyle = '#fff';
+    maskContext.beginPath();
+    for (var i = 0; i < ring.length; i++) {
+      var px = lngToWorldX(ring[i][0], z) - x * 256;
+      var py = latToWorldY(ring[i][1], z) - y * 256;
+      if (i === 0) maskContext.moveTo(px, py); else maskContext.lineTo(px, py);
+    }
+    maskContext.closePath();
+    maskContext.fill();
+    var alpha = maskContext.getImageData(0, 0, 256, 256).data;
+    var covered = 0;
+    var partial = false;
+    for (var a = 3; a < alpha.length; a += 4) {
+      if (alpha[a]) covered++;
+      if (alpha[a] > 0 && alpha[a] < 255) partial = true;
+    }
+    return {pixels: alpha, covered: covered, full: covered === 65536 && !partial};
+  }
+
+  function decodeTile(key, response) {
+    if (decodedTileCache.has(key)) return decodedTileCache.get(key);
+    var promise = (async function () {
+      if (!response || !response.data) return null;
+      var blob = new Blob([response.data], {type: 'image/webp'});
+      imageContext.clearRect(0, 0, 256, 256);
+      if (typeof createImageBitmap === 'function') {
+        var bitmap = await createImageBitmap(blob);
+        imageContext.drawImage(bitmap, 0, 0, 256, 256);
+        if (bitmap.close) bitmap.close();
+      } else {
+        await new Promise(function (resolve, reject) {
+          var image = new Image();
+          var objectUrl = URL.createObjectURL(blob);
+          image.onload = function () { imageContext.drawImage(image, 0, 0, 256, 256); URL.revokeObjectURL(objectUrl); resolve(); };
+          image.onerror = function () { URL.revokeObjectURL(objectUrl); reject(new Error('WebP decode failed')); };
+          image.src = objectUrl;
+        });
+      }
+      return new Uint8ClampedArray(imageContext.getImageData(0, 0, 256, 256).data);
+    })();
+    decodedTileCache.set(key, promise);
+    if (decodedTileCache.size > 48) decodedTileCache.delete(decodedTileCache.keys().next().value);
+    return promise;
+  }
+
+  async function sumTile(ring, z, x, y, meta) {
+    var key = z + '/' + x + '/' + y;
+    var mask = buildTileMask(ring, z, x, y);
+    if (!mask.covered) return {population: 0, fetched: 0};
+    if (mask.full && Object.prototype.hasOwnProperty.call(meta.tileTotals, key)) {
+      return {population: Number(meta.tileTotals[key]) || 0, fetched: 0};
+    }
+    var response = await archive.getZxy(z, x, y);
+    if (!response) return {population: 0, fetched: 1};
+    var rgba = await decodeTile(key, response);
+    if (!rgba) return {population: 0, fetched: 1};
+    var pmax = Number(meta.maxPop[String(z)]);
+    var scale = Math.log1p(pmax) / 255;
+    var sum = 0;
+    for (var i = 0; i < 65536; i++) {
+      var alpha = mask.pixels[i * 4 + 3];
+      if (!alpha) continue;
+      var value = rgba[i * 4];
+      if (!value) continue;
+      sum += Math.expm1(value * scale) * (alpha / 255);
+    }
+    return {population: sum, fetched: 1};
+  }
+
+  async function calculate(ring) {
+    var token = ++calcToken;
+    var started = performance.now();
+    setBusy();
+    try {
+      var meta = await loadMetadata();
+      if (token !== calcToken) return;
+      if (!meta || !meta.maxPop || !meta.tileTotals) throw new Error('Population metadata is incomplete');
+      var bounds = ringBounds(ring);
+      var z = chooseZoom(bounds);
+      var range = tileRangeForBounds(bounds, z);
+      var jobs = [];
+      for (var y = range.y0; y <= range.y1; y++) {
+        for (var x = range.x0; x <= range.x1; x++) jobs.push(sumTile(ring, z, x, y, meta));
+      }
+      var results = await Promise.all(jobs);
+      if (token !== calcToken) return;
+      var population = 0, fetched = 0;
+      for (var i = 0; i < results.length; i++) {
+        population += results[i].population;
+        fetched += results[i].fetched;
+      }
+      showResult({population: population, zoom: z, tiles: jobs.length, fetched: fetched, elapsed: performance.now() - started});
+      return {population: population, zoom: z, tiles: jobs.length, fetched: fetched};
+    } catch (error) {
+      if (token === calcToken) showCalculationError(error);
+      throw error;
+    }
+  }
+
+  window.__rasterPopulationTest = {
+    calculateRing: function (ring) {
+      var closed = ring.slice();
+      if (closed.length && (closed[0][0] !== closed[closed.length - 1][0] || closed[0][1] !== closed[closed.length - 1][1])) closed.push(closed[0].slice());
+      return calculate(closed);
+    },
+    metadata: loadMetadata
+  };
+
+  window.addEventListener('resize', renderSelection);
+  loadMetadata().catch(function (error) { console.error('Population archive metadata failed to load', error); });
+  initMap();
+})();
+</script>
+</body>
+</html>
