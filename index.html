@@ -372,7 +372,7 @@
         .cluster {
           top: auto;
           right: max(10px, env(safe-area-inset-right));
-          bottom: max(24px, calc(env(safe-area-inset-bottom) + 20px));
+          bottom: max(34px, calc(env(safe-area-inset-bottom) + 30px));
           left: max(10px, env(safe-area-inset-left));
           width: auto;
           max-width: 390px;
@@ -545,10 +545,14 @@
         // Read the adjacent PMTiles archive directly. No chunk manifest or embedded data.
         var tilesUrl = new URL("population-lo.pmtiles", window.location.href)
           .href;
+        var tiles11Url = new URL("population-hi.pmtiles", window.location.href)
+          .href;
         var protocol = new pmtiles.Protocol();
         maplibregl.addProtocol("pmtiles", protocol.tile);
         var archive = new pmtiles.PMTiles(tilesUrl);
         protocol.add(archive);
+        var archive2 = new pmtiles.PMTiles(tiles11Url);
+        protocol.add(archive2);
 
         var metadataPromise = null;
         var metadata = null;
@@ -610,10 +614,6 @@
               attributionControl: true,
               hash: true,
             });
-            map.addControl(
-              new maplibregl.NavigationControl({ showCompass: false }),
-              "bottom-left",
-            );
             map.on("move", function () {
               var center = map.getCenter();
               camera = {
@@ -645,8 +645,21 @@
             baseShift: 0,
             url: "pmtiles://" + tilesUrl,
             tileSize: 256,
-            minzoom: 4,
+            minzoom: 0,
             maxzoom: 10,
+            attribution: "2020 Census PL 94-171",
+          });
+          map.addSource("population-raster-11", {
+            type: "raster-dem",
+            encoding: "custom",
+            redFactor: 1,
+            greenFactor: 0,
+            blueFactor: 0,
+            baseShift: 0,
+            url: "pmtiles://" + tiles11Url,
+            tileSize: 256,
+            minzoom: 11,
+            maxzoom: 11,
             attribution: "2020 Census PL 94-171",
           });
           var layers = map.getStyle().layers || [];
@@ -657,40 +670,79 @@
               break;
             }
           }
-          let last = 0;
           for (const { id } of map.getStyle().layers) {
             if (id.indexOf("highway") === 0 || id.indexOf("railway") === 0) {
               map.removeLayer(id);
             }
           }
-          for (const [maxzoom, thresh] of [[24, 150]]) {
-            map.addLayer(
-              {
-                id: `population-density-${maxzoom}`,
-                type: "color-relief",
-                source: "population-raster",
-                minzoom: last,
-                maxzoom,
-                layout: { visibility: densityVisible ? "visible" : "none" },
-                paint: {
-                  "color-relief-opacity": 0.5,
-                  "color-relief-color": [
-                    "interpolate",
-                    ["linear"],
-                    ["elevation"],
-                    0,
-                    "rgba(0,0,0,0)",
-                    thresh,
-                    "orange",
-                    255,
-                    "white",
-                  ],
-                },
+          map.addLayer(
+            {
+              id: `population-density`,
+              type: "color-relief",
+              source: "population-raster",
+              minzoom: 0,
+              maxzoom: 11,
+              layout: { visibility: densityVisible ? "visible" : "none" },
+              paint: {
+                "color-relief-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  0,
+                  1,
+                  10,
+                  0.5,
+                  11,
+                  0,
+                ],
+                "color-relief-color": [
+                  "interpolate",
+                  ["linear"],
+                  ["elevation"],
+                  0,
+                  "rgba(0,0,0,0)",
+                  128,
+                  "orange",
+                  255,
+                  "white",
+                ],
               },
-              beforeId,
-            );
-            last = maxzoom;
-          }
+            },
+            beforeId,
+          );
+          map.addLayer(
+            {
+              id: `population-density-11`,
+              type: "color-relief",
+              source: "population-raster-11",
+              minzoom: 10,
+              maxzoom: 24,
+              layout: { visibility: densityVisible ? "visible" : "none" },
+              paint: {
+                "color-relief-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  10,
+                  0,
+                  11,
+                  0.5,
+                ],
+                "color-relief-color": [
+                  "interpolate",
+                  ["linear"],
+                  ["elevation"],
+                  0,
+                  "rgba(0,0,0,0)",
+                  128,
+                  "orange",
+                  255,
+                  "white",
+                ],
+              },
+            },
+            beforeId,
+          );
           renderSelection();
         }
 
@@ -964,7 +1016,7 @@
           };
         }
         function chooseZoom(bounds) {
-          for (var z = 11; z >= 4; z--) {
+          for (var z = 10; z >= 0; z--) {
             if (tileRangeForBounds(bounds, z).count <= 16) return z;
           }
           return 4;
